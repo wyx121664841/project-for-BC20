@@ -1,0 +1,16 @@
+..\obj\adc.o: ..\HARDWARE\adc.c
+..\obj\adc.o: ..\HARDWARE\adc.h
+..\obj\adc.o: ..\User\stm32f0xx.h
+..\obj\adc.o: ..\CORE\core_cm0.h
+..\obj\adc.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+..\obj\adc.o: ..\CORE\core_cmInstr.h
+..\obj\adc.o: ..\CORE\core_cmFunc.h
+..\obj\adc.o: ..\User\system_stm32f0xx.h
+..\obj\adc.o: ..\User\stm32f0xx_conf.h
+..\obj\adc.o: ..\STM32F03x_FWLib\inc\stm32f0xx_gpio.h
+..\obj\adc.o: ..\User\stm32f0xx.h
+..\obj\adc.o: ..\STM32F03x_FWLib\inc\stm32f0xx_rcc.h
+..\obj\adc.o: ..\STM32F03x_FWLib\inc\stm32f0xx_usart.h
+..\obj\adc.o: ..\STM32F03x_FWLib\inc\stm32f0xx_misc.h
+..\obj\adc.o: ..\STM32F03x_FWLib\inc\stm32f0xx_dma.h
+..\obj\adc.o: ..\STM32F03x_FWLib\inc\stm32f0xx_adc.h

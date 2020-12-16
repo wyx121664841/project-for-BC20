@@ -1,0 +1,1179 @@
+
+
+#include "USART1.h"
+#include "stm32f0xx_tim.h"
+#include "stm32f0xx_misc.h"
+#include "stm32f0xx_iwdg.h"
+#include "stm32f0xx_usart.h"
+#include "LED.h"
+#include "Flash_Mem.h"
+#include <stdio.h>
+#include "rtc.h"
+#include "string.h"
+#include "delay.h"
+//¼ÓÈëÒÔÏÂ´úÂë,Ö§³Öprintfº¯Êý,¶ø²»ÐèÒªÑ¡Ôñuse MicroLIB
+#if 1
+#pragma import(__use_no_semihosting)
+//±ê×¼¿âÐèÒªµÄÖ§³Öº¯Êý
+struct __FILE
+{
+    int handle;
+    /* Whatever you require here. If the only file you are using is */
+    /* standard output using printf() for debugging, no file handling */
+    /* is required. */
+};
+/* FILE is typedef¡¯ d in stdio.h. */
+FILE __stdout;
+//¶¨Òå_sys_exit()ÒÔ±ÜÃâÊ¹ÓÃ°ëÖ÷»úÄ£Ê½
+void _sys_exit(int x)
+{
+    x = x;
+}
+//ÖØ¶¨Òåfputcº¯Êý
+int fputc(int ch, FILE *f)
+{
+    while(!((USART1->ISR)&(1<<7))) {}
+    USART1->TDR=ch;
+    return (ch);
+}
+#endif
+
+
+
+
+uint8_t addr[6]; //ID»º´æ
+volatile unsigned char touch_flag;
+uint8_t sendbuff[150];
+uint8_t rxbuff1[150],rxbuff2[20],key_buff[2];
+uint8_t rxbuff_485[150];
+u8 GSM_CON;
+extern float ADC_MQ9,ADC_TVOC,ADC_val4,ADC_val5;
+extern float PM25content;
+
+u8 ReFlame_OneBak[100];
+uint8_t addr3[6]= {0x01,0x00,0x00,0x00,0x00,0x02}; //ID»º´æ
+uint8_t addr1[6]= {0x01,0x00,0x00,0x00,0x00,0x02}; //ID»º´æ
+u8 flag_485=0;
+u8 recviflag=0,count=0;
+u8 timflag=0;
+uint8_t ac=0;
+extern u8 cuu;
+u16 wireless_check=0;
+u8 wireless_id[6]= {0};
+u8 stop_sys=0;
+u8 wireless_rxbuff[100];
+u8 wireless_rxbuff_count;
+u8 g4g3=1;
+u8 g4g3_flag=0;
+u8 server_add1[30];  		//  ·þÎñÆ÷µØÖ·
+u8 server_add2[30];
+u8 com1[6];             //¶Ë¿Ú1
+u8 com2[6];							//¶Ë¿Ú2
+char* set_baudrate;    //  ÉèÖÃ²¨ÌØÂÊ
+char* set_heartbeat;      //  ÉèÖÃÐÄÌø°üÄÚÈÝ ÐÄÌø°ü¸ñÊ½  Ó¦´ðÊ±¼ä   ÐÄÌø¼ä¸ô  ÖØÁ¬¼ä¸ô
+extern u8 PM25flag;
+extern u8 SIMID[20];
+u8 ProductKey[12]= {0};
+u8 DeviceName[20]= {0};
+u8 DeviceSecret[32]= {0};
+u8 DeviceNamelenth=13;
+u16 heartbeatcount=0;  //ÐÄÌø¼ÆÊý
+extern u8 tempera;
+extern u8 humi;
+void writeAddr(void)
+{
+
+    FLASH_Unlock();
+    FLASH_ClearFlag(FLASH_FLAG_BSY | FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPERR);
+    FLASH_ErasePage(FLASH_PULL_ID& (~(FLASH_PAGE_SIZE -1 )));
+//	Flash_Write_Without_check(FLASH_PRICE,&PricePlan[0][0],40);
+    // Pull_ID[3] = ComAddress;
+    Flash_Write_Without_check(FLASH_PULL_ID,addr,6);
+    FLASH_Lock();
+    Flash_Read(FLASH_PULL_ID,addr,6);
+}
+void USART1_Init(uint32_t baud)
+{
+    GPIO_InitTypeDef GPIO_InitStructure;
+    USART_InitTypeDef USART_InitStructure;
+    NVIC_InitTypeDef NVIC_InitStruct;
+
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA|RCC_AHBPeriph_GPIOB, ENABLE);  //Ê¹ÄÜGPIOAµÄÊ±ÖÓ
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);//Ê¹ÄÜUSARTµÄÊ±ÖÓ
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2, ENABLE);//Ê¹ÄÜUSARTµÄÊ±ÖÓ
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART3, ENABLE);//Ê¹ÄÜUSARTµÄÊ±ÖÓ
+
+    /* USART1µÄ¶Ë¿ÚÅäÖÃ */
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_1);//ÅäÖÃPA9³ÉµÚ¶þ¹¦ÄÜÒý½Å	TX
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_1);//ÅäÖÃPA10³ÉµÚ¶þ¹¦ÄÜÒý½Å  RX
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource2, GPIO_AF_1);//ÅäÖÃPA9³ÉµÚ¶þ¹¦ÄÜÒý½Å	TX
+    GPIO_PinAFConfig(GPIOA, GPIO_PinSource3, GPIO_AF_1);//ÅäÖÃPA10³ÉµÚ¶þ¹¦ÄÜÒý½Å  RX
+
+//    GPIO_PinAFConfig(GPIOB, GPIO_PinSource11, GPIO_AF_4);//ÅäÖÃPB4³ÉµÚ¶þ¹¦ÄÜÒý½Å	RX
+//    GPIO_PinAFConfig(GPIOB, GPIO_PinSource10, GPIO_AF_4);//ÅäÖÃPB3³ÉµÚ¶þ¹¦ÄÜÒý½Å  TX
+
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_9|GPIO_Pin_10;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+    GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+//    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11|GPIO_Pin_10;
+//    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+//    GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1|GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+    GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+    GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1|GPIO_Pin_8;//485ÊÕ·¢¿ØÖÆ
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+
+    /* USART1µÄ»ù±¾ÅäÖÃ */
+    USART_InitStructure.USART_BaudRate = baud;              //²¨ÌØÂÊ
+    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+    USART_InitStructure.USART_Parity = USART_Parity_No;
+    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+    USART_Init(USART1, &USART_InitStructure);
+    USART_ClearFlag(USART1, USART_FLAG_RXNE);
+    USART_ClearITPendingBit(USART1,USART_IT_RXNE);
+    USART_ITConfig(USART1,USART_IT_RXNE,ENABLE);           //Ê¹ÄÜ½ÓÊÕÖÐ¶Ï
+    USART_ITConfig(USART1, USART_IT_ORE, ENABLE);   //Êý¾ÝÒç³öÖÐ¶Ï
+    USART_Cmd(USART1, ENABLE);                             //Ê¹ÄÜUSART1
+
+
+//
+    /* USART2µÄ»ù±¾ÅäÖÃ */
+    USART_InitStructure.USART_BaudRate = 115200;              //²¨ÌØÂÊ
+    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+    USART_InitStructure.USART_Parity = USART_Parity_No;
+    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+    USART_Init(USART2, &USART_InitStructure);
+    USART_ClearFlag(USART2, USART_FLAG_RXNE);
+    USART_ClearITPendingBit(USART2,USART_IT_RXNE);
+    USART_ITConfig(USART2,USART_IT_RXNE,ENABLE);           //Ê¹ÄÜ½ÓÊÕÖÐ¶Ï
+    USART_ITConfig(USART2, USART_IT_ORE, ENABLE);//Êý¾ÝÒç³öÖÐ¶Ï
+    USART_Cmd(USART2, ENABLE);                             //Ê¹ÄÜUSART2
+
+    /* USART3µÄ»ù±¾ÅäÖÃ */
+//    USART_InitStructure.USART_BaudRate = 115200;              //²¨ÌØÂÊ
+//    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+//    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+//    USART_InitStructure.USART_Parity = USART_Parity_No;
+//    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+//    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+//    USART_Init(USART3, &USART_InitStructure);
+//    USART_ClearFlag(USART3, USART_FLAG_RXNE);
+//    USART_ClearITPendingBit(USART3,USART_IT_RXNE);
+//    USART_ITConfig(USART3,USART_IT_RXNE,ENABLE);           //Ê¹ÄÜ½ÓÊÕÖÐ¶Ï
+//    USART_ITConfig(USART3, USART_IT_ORE, ENABLE);//Êý¾ÝÒç³öÖÐ¶Ï
+//    USART_Cmd(USART3, ENABLE);                             //Ê¹ÄÜUSART2
+
+    /* USART1\2¡¢3µÄNVICÖÐ¶ÏÅäÖÃ */
+    NVIC_InitStruct.NVIC_IRQChannel = USART1_IRQn;
+    NVIC_InitStruct.NVIC_IRQChannelPriority = 0x02;
+    NVIC_InitStruct.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStruct);
+
+    NVIC_InitStruct.NVIC_IRQChannel = USART2_IRQn;
+    NVIC_InitStruct.NVIC_IRQChannelPriority = 0x03;
+    NVIC_InitStruct.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStruct);
+
+    NVIC_InitStruct.NVIC_IRQChannel =USART3_6_IRQn;
+    NVIC_InitStruct.NVIC_IRQChannelPriority = 0x04;
+    NVIC_InitStruct.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStruct);
+
+//    GPIO_ResetBits(GPIOB,GPIO_Pin_1|GPIO_Pin_0);////¸´Î»
+    delay_ms(100);
+    GPIO_SetBits(GPIOA,GPIO_Pin_8);//GPRSreset
+    delay_ms(500);
+    GPIO_ResetBits(GPIOA,GPIO_Pin_8);//GPRSreset
+}
+
+void TIM2_Config(void)
+{
+    TIM_TimeBaseInitTypeDef  TIM_TimeBaseStructure;
+    NVIC_InitTypeDef         NVIC_InitStructure;
+    //Ê¹ÄÜTIM3Ê±ÖÓ
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3|RCC_APB1Periph_TIM14, ENABLE);
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM16, ENABLE);
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM15, ENABLE);
+//		RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM15, ENABLE);
+    NVIC_InitStructure.NVIC_IRQChannel = TIM3_IRQn;//TIM3ÖÐ¶Ï
+    NVIC_InitStructure.NVIC_IRQChannelPriority = 2;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;//IRQÍ¨µÀ±»Ê¹ÄÜ
+    NVIC_Init(&NVIC_InitStructure);  //¸ù¾ÝNVIC_InitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯ÍâÉèNVIC¼Ä´æÆ÷
+
+
+    NVIC_InitStructure.NVIC_IRQChannel = TIM14_IRQn;//TIM14ÖÐ¶Ï
+    NVIC_InitStructure.NVIC_IRQChannelPriority = 2;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;//IRQÍ¨µÀ±»Ê¹ÄÜ
+    NVIC_Init(&NVIC_InitStructure);  //¸ù¾ÝNVIC_InitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯ÍâÉèNVIC¼Ä´æÆ÷
+
+    NVIC_InitStructure.NVIC_IRQChannel = TIM15_IRQn;//TIM15ÖÐ¶Ï
+    NVIC_InitStructure.NVIC_IRQChannelPriority = 3;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;//IRQÍ¨µÀ±»Ê¹ÄÜ
+    NVIC_Init(&NVIC_InitStructure);  //¸ù¾ÝNVIC_InitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯ÍâÉèNVIC¼Ä´æÆ÷
+
+    NVIC_InitStructure.NVIC_IRQChannel = TIM16_IRQn;//TIM16ÖÐ¶Ï
+    NVIC_InitStructure.NVIC_IRQChannelPriority = 1;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;//IRQÍ¨µÀ±»Ê¹ÄÜ
+    NVIC_Init(&NVIC_InitStructure);  //¸ù¾ÝNVIC_InitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯ÍâÉèNVIC¼Ä´æÆ÷
+
+
+    //¶¨Ê±Æ÷¶¨Ê±Ê±¼äT¼ÆËã¹«Ê½£ºT=(TIM_Period+1)*(TIM_Prescaler+1)/TIMxCLK
+    TIM_TimeBaseStructure.TIM_Period = (100-1);//×Ô¶¯ÖØ×°ÔØÖµ10--¶¨Ê±Ê±¼ä(10*4800/48M)s
+    TIM_TimeBaseStructure.TIM_Prescaler =(4800-1);//Ô¤·ÖÆµÖµ£¬+1Îª·ÖÆµÏµÊý
+    TIM_TimeBaseStructure.TIM_ClockDivision =0;
+    TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;	//TIMÏòÉÏ¼ÆÊýÄ£Ê½
+    TIM_TimeBaseInit(TIM3, &TIM_TimeBaseStructure); //¸ù¾ÝTIM_TimeBaseInitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯TIMxµÄÊ±¼ä»ùÊýµ¥Î»
+    TIM_ITConfig(TIM3,TIM_IT_Update,ENABLE);	//Ê¹ÄÜTIM3ÖÐ¶ÏÔ´
+
+    TIM_TimeBaseStructure.TIM_Period = (100-1);//×Ô¶¯ÖØ×°ÔØÖµ10--¶¨Ê±Ê±¼ä(10*4800/48M)s
+    TIM_TimeBaseStructure.TIM_Prescaler =(4800-1);//Ô¤·ÖÆµÖµ£¬+1Îª·ÖÆµÏµÊý
+    TIM_TimeBaseStructure.TIM_ClockDivision =0;
+    TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;	//TIMÏòÉÏ¼ÆÊýÄ£Ê½
+    TIM_TimeBaseInit(TIM14, &TIM_TimeBaseStructure); //¸ù¾ÝTIM_TimeBaseInitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯TIMxµÄÊ±¼ä»ùÊýµ¥Î»
+    TIM_ITConfig(TIM14,TIM_IT_Update,ENABLE);	//Ê¹ÄÜTIM14ÖÐ¶ÏÔ´
+
+    TIM_TimeBaseStructure.TIM_Period = (5000-1);//×Ô¶¯ÖØ×°ÔØÖµ10--¶¨Ê±Ê±¼ä(10*4800/48M)s
+    TIM_TimeBaseStructure.TIM_Prescaler =(4800-1);//Ô¤·ÖÆµÖµ£¬+1Îª·ÖÆµÏµÊý
+    TIM_TimeBaseStructure.TIM_ClockDivision =0;
+    TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;	//TIMÏòÉÏ¼ÆÊýÄ£Ê½
+    TIM_TimeBaseInit(TIM16, &TIM_TimeBaseStructure); //¸ù¾ÝTIM_TimeBaseInitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯TIMxµÄÊ±¼ä»ùÊýµ¥Î»
+    TIM_ITConfig(TIM16,TIM_IT_Update,ENABLE);	//Ê¹ÄÜTIM14ÖÐ¶ÏÔ´
+
+    TIM_TimeBaseStructure.TIM_Period = (100-1);//×Ô¶¯ÖØ×°ÔØÖµ10--¶¨Ê±Ê±¼ä(10*4800/48M)s
+    TIM_TimeBaseStructure.TIM_Prescaler =(4800-1);//Ô¤·ÖÆµÖµ£¬+1Îª·ÖÆµÏµÊý
+    TIM_TimeBaseStructure.TIM_ClockDivision =0;
+    TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;	//TIMÏòÉÏ¼ÆÊýÄ£Ê½
+    TIM_TimeBaseInit(TIM15, &TIM_TimeBaseStructure); //¸ù¾ÝTIM_TimeBaseInitStructÖÐÖ¸¶¨µÄ²ÎÊý³õÊ¼»¯TIMxµÄÊ±¼ä»ùÊýµ¥Î»
+    TIM_ITConfig(TIM15,TIM_IT_Update,ENABLE);	//Ê¹ÄÜTIM14ÖÐ¶ÏÔ´
+
+
+    //Ê¹ÄÜTIMxÍâÉè
+    TIM_Cmd(TIM3, DISABLE);//¹Ø±Õ¶¨Ê±Æ÷
+    TIM_Cmd(TIM14, DISABLE);
+    TIM_Cmd(TIM15, DISABLE);
+    TIM_Cmd(TIM16, ENABLE);
+}
+void rs485_r(void)
+{
+    GPIO_ResetBits(GPIOA, GPIO_Pin_1);
+}
+void rs485_w(void)
+{
+    GPIO_SetBits(GPIOA, GPIO_Pin_1);
+}
+//=============================================================================
+//ÎÄ¼þÃû³Æ£º
+//¹¦ÄÜ¸ÅÒª£ºUSART1ÖÐ¶Ïº¯Êý
+//²ÎÊýËµÃ÷£ºÎÞ
+//º¯Êý·µ»Ø£ºÎÞ
+//=============================================================================
+void USART1_IRQHandler(void)
+{
+
+//	GPIO_ResetBits(GPIOA,GPIO_Pin_15);
+    if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+    {
+
+        USART_ClearFlag(USART1, USART_FLAG_RXNE);
+        USART_ClearITPendingBit(USART1,USART_IT_ORE);//Çå³ýÊý¾ÝÒç³ö±êÖ¾
+        USART_ClearITPendingBit(USART1,USART_IT_RXNE);
+        USART_ClearITPendingBit(USART1,USART_IT_NE);
+        USART_ClearITPendingBit(USART1,USART_IT_FE);
+// USART_SendData(USART1,USART_ReceiveData(USART1));
+        // while (USART_GetFlagStatus(USART1,USART_FLAG_TXE) == RESET);
+
+        rxbuff1[count]=USART_ReceiveData(USART1);
+        count++;
+        if(count>149)count=0;
+        //GPIO_SetBits(GPIOA,GPIO_Pin_0);
+        TIM3->CNT=0;
+        TIM_Cmd(TIM3, ENABLE);
+        //LED_OFF();
+    }
+
+
+}
+
+void USART2_IRQHandler(void)
+{
+
+
+    if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)
+    {
+        USART_ClearITPendingBit(USART2,USART_IT_ORE);//Çå³ýÊý¾ÝÒç³ö±êÖ¾
+        USART_ClearITPendingBit(USART2,USART_IT_RXNE);
+        USART_ClearITPendingBit(USART2,USART_IT_NE);
+        USART_ClearITPendingBit(USART2,USART_IT_FE);
+//	  USART_SendData(USART2,USART_ReceiveData(USART2));
+//		while (USART_GetFlagStatus(USART2,USART_FLAG_TXE) == RESET);
+
+        rxbuff_485[ac]=USART_ReceiveData(USART2);
+        ac++;
+        if(ac>150)ac=0;
+        flag_485=1;
+        //	LED_ON();
+        TIM14->CNT=0;
+        TIM_Cmd(TIM14, ENABLE);
+
+    }
+
+}
+
+
+void USART3_6_IRQHandler(void)
+{
+
+    if(USART_GetITStatus(USART3, USART_IT_RXNE) != RESET)
+    {
+        USART_ClearITPendingBit(USART3,USART_IT_ORE);//Çå³ýÊý¾ÝÒç³ö±êÖ¾
+        USART_ClearITPendingBit(USART3,USART_IT_RXNE);
+        USART_ClearITPendingBit(USART3,USART_IT_NE);
+        USART_ClearITPendingBit(USART3,USART_IT_FE);
+//	  USART_SendData(USART2,USART_ReceiveData(USART2));
+//		while (USART_GetFlagStatus(USART2,USART_FLAG_TXE) == RESET);
+        wireless_rxbuff[wireless_rxbuff_count]=USART_ReceiveData(USART3);
+        wireless_rxbuff_count++;
+        if(wireless_rxbuff_count>98)wireless_rxbuff_count=0;
+        TIM15->CNT=0;
+        TIM_Cmd(TIM15, ENABLE);
+    }
+
+}
+
+//¶¨Ê±Æ÷ÖÐ¶Ïº¯Êý
+
+void TIM3_IRQHandler(void)			//1ms½øÈëÒ»´ÎÖÐ¶Ï   ´®¿Ú1 ´¦Àí
+{
+
+    u8 i,cc,len;
+		char *strx=0;
+    if ( TIM_GetITStatus(TIM3,TIM_IT_Update) != RESET ) //ÊÇ·ñ·¢ÉúÖÐ¶Ï
+    {
+
+        TIM_ClearITPendingBit(TIM3, TIM_FLAG_Update);    //Çå³ýÖÐ¶Ï´ý´¦ÀíÎ»
+        TIM_Cmd(TIM3, DISABLE);
+        USART_ITConfig(USART1,USART_IT_RXNE,DISABLE);           //¹Ø±Õ½ÓÊÕÖÐ¶Ï
+        memcpy(ReFlame_OneBak,rxbuff1,count);
+
+			strx=strstr((const char*)ReFlame_OneBak,(const char*)"+QMTPUBEX: 0,0,0");
+			if(strx!=NULL)
+			{
+				cuu=0;
+				GSM_CON=CONNECT;
+			}
+			strx=strstr((const char*)ReFlame_OneBak,(const char*)"RDY");
+			if(strx!=NULL)
+			{
+				GSM_CON=RST;
+			}
+			strx=strstr((const char*)ReFlame_OneBak,(const char*)"ERROR");
+			if(strx!=NULL)
+			{
+				GSM_CON=RST;
+				sendBUFF("AT+CFUN=1,1\r\n");            //ÖØÆôÄ£¿é
+			}
+				for(cc=0; cc<count; cc++) //·¢ËÍÊý¾Ýµ½´®¿Ú2¹Û²ì   485
+        {
+            USART_SendData(USART3,rxbuff1[cc]);
+            while (USART_GetFlagStatus(USART3,USART_FLAG_TXE) == RESET);
+            USART_SendData(USART2,rxbuff1[cc]);
+            while (USART_GetFlagStatus(USART2,USART_FLAG_TXE) == RESET);
+        }
+        for(i=0; i<count; i++)
+        {
+            //Ê¶±ð4G
+            if((ReFlame_OneBak[i]=='E')&&(ReFlame_OneBak[i+1]=='C') &&(ReFlame_OneBak[i+2]=='2')&&(ReFlame_OneBak[i+3]=='0')&&(ReFlame_OneBak[i+4]=='0')&&(ReFlame_OneBak[i+5]=='T'))
+            {
+                if(g4g3_flag)g4g3=4;
+            }
+            //Ê¶±ð2G
+            if((ReFlame_OneBak[i]=='S')&&(ReFlame_OneBak[i+1]=='I') &&(ReFlame_OneBak[i+2]=='M')&&(ReFlame_OneBak[i+3]=='8')&&(ReFlame_OneBak[i+4]=='0')&&(ReFlame_OneBak[i+5]=='0'))
+            {
+                if(g4g3_flag)g4g3=2;
+            }
+            //±»·þÎñÆ÷Ìßµô
+            if((ReFlame_OneBak[i]=='N')&&(ReFlame_OneBak[i+1]=='O') &&(ReFlame_OneBak[i+3]=='C')&&(ReFlame_OneBak[i+4]=='A')&&(ReFlame_OneBak[i+5]=='R')&&(ReFlame_OneBak[i+6]=='R'))
+            {
+                GSM_CON=RST ;
+            }
+            //Á´½Ó³É¹¦
+            if((ReFlame_OneBak[i]=='C')&&(ReFlame_OneBak[i+1]=='O') &&(ReFlame_OneBak[i+2]=='N')&&(ReFlame_OneBak[i+3]=='N')&&(ReFlame_OneBak[i+4]=='E'))
+            {
+                GSM_CON=CONNECT;
+                sendBUFF3("Á¬½Ó³É¹¦");
+            }
+            //·µ»Ø´íÎó
+            if((ReFlame_OneBak[i]=='E')&&(ReFlame_OneBak[i+1]=='R') &&(ReFlame_OneBak[i+2]=='R')&&(ReFlame_OneBak[i+3]=='O')&&(ReFlame_OneBak[i+4]=='R'))
+            {
+                GSM_CON=RST;
+            }
+            //ÒÑ¾­Á¬½Ó
+            if(((ReFlame_OneBak[i+1]== 'L') && ( ReFlame_OneBak[i+2]=='O')&&(ReFlame_OneBak[i+3]=='S')))
+                GSM_CON=RST;
+            //Á¬½ÓÊ§°Ü
+            if(((ReFlame_OneBak[i]== 'F' )&&(ReFlame_OneBak[i+1]== 'A' )&&(  ReFlame_OneBak[i+2]=='I')&&(ReFlame_OneBak[i+3]=='L')))
+                GSM_CON=RST;  // RST
+            //ÐÅºÅÇ¿¶È
+            if((ReFlame_OneBak[i+1]=='C')&&(ReFlame_OneBak[i+2]=='S')&&(ReFlame_OneBak[i+3]=='Q'))//ÐÅºÅÇ¿¶È
+            {
+
+            }
+            if((ReFlame_OneBak[i]==0x68)&&(ReFlame_OneBak[i+1]==addr[0])&&(ReFlame_OneBak[i+6]==addr[5])&&(ReFlame_OneBak[i+7]==0x68))
+            {
+                memcpy(rxbuff1,ReFlame_OneBak,count-i);
+                break;
+            }
+            //»ñÈ¡SIM¿¨ID
+            if((ReFlame_OneBak[i]=='8')&&(ReFlame_OneBak[i+1]=='9')&&(ReFlame_OneBak[i+2]=='8')&&(ReFlame_OneBak[i+3]=='6'))
+            {
+//                sendBUFF("AT+CCID\r\n");
+
+            }
+            //if((ReFlame_OneBak[2+i]=='A')&&(ReFlame_OneBak[3+i]=='L')&&(ReFlame_OneBak[4+i]=='R')){GSM_CON=CONNECT ;cuu=0;break;}
+        }
+        i=0;
+        len=count;
+        count=0;
+        USART_ITConfig(USART1,USART_IT_RXNE,ENABLE);           //Ê¹ÄÜ½ÓÊÕÖÐ¶Ï
+        memset(rxbuff1,0,150);
+        recviflag=1;
+    }
+}
+void TIM14_IRQHandler(void)					//5ms½øÈëÒ»´ÎÖÐ¶Ï   ´®¿Ú2 ´¦Àí
+{
+
+    u8 ii;
+    u8 lenth=0;
+//		u8 PK[11];
+//		u8 DN[20];
+		char DS[100]={0};
+    if ( TIM_GetITStatus(TIM14,TIM_IT_Update) != RESET ) //ÊÇ·ñ·¢ÉúÖÐ¶Ï
+    {
+        TIM_ClearITPendingBit(TIM14, TIM_FLAG_Update);     //Çå³ýÖÐ¶Ï´ý´¦ÀíÎ»
+        TIM_Cmd(TIM14, DISABLE);
+
+        USART_ITConfig(USART2,USART_IT_RXNE,DISABLE);           //¹Ø±Õ½ÓÊÕÖÐ¶Ï
+
+        for(ii=0; ii<(ac); ii++) //¸ø´®¿Ú1Êý¾Ý
+        {
+            USART_SendData(USART1,rxbuff_485[ii]);
+            while (USART_GetFlagStatus(USART1,USART_FLAG_TXE) == RESET);
+        }
+
+        /*´®¿ÚÊý¾Ý´¦Àí*******************************************************/
+//        for(ii=0; ii<ac; ii++)
+//        {
+//            if(rxbuff_485[ii]=='A' && rxbuff_485[ii+1]=='A')
+//            {
+//                memcpy(rxbuff_485bak,rxbuff_485,ac-ii);
+//            }
+//        }
+        if(rxbuff_485[0]=='P' && rxbuff_485[1]=='K' && rxbuff_485[2]=='5' && rxbuff_485[3]=='5')  //ÅäÖÃProductKey
+        {
+            lenth=(rxbuff_485[4]-'0')*10+rxbuff_485[5]-'0';                                                                //Êý¾Ý³¤¶È
+            strncpy((char*)ProductKey,(char*)(rxbuff_485+6),lenth);
+            if(ProductKey[0]!=0 && ProductKey[lenth-1]!=0)
+            {
+								sendBUFF2("OK,");
+                sendBUFF2(ProductKey);
+                sendBUFF2("\r\n");
+            }
+
+        }
+        if(rxbuff_485[0]=='D' && rxbuff_485[1]=='N' && rxbuff_485[2]=='5' && rxbuff_485[3]=='5')  //DeviceName
+        {
+            lenth=(rxbuff_485[4]-'0')*10+rxbuff_485[5]-'0';                                                               //Êý¾Ý³¤¶È
+						DeviceNamelenth=lenth;
+            strncpy((char*)DeviceName,(char*)(rxbuff_485+6),lenth);	
+						ProductKey[11]=DeviceNamelenth;
+            if(DeviceName[0]!=0 && DeviceName[lenth-1]!=0)
+            {	
+								sendBUFF2("OK,");
+                sendBUFF2(DeviceName);
+                sendBUFF2("\r\n");
+            }
+        }
+        if(rxbuff_485[0]=='D' && rxbuff_485[1]=='S' && rxbuff_485[2]=='5' && rxbuff_485[3]=='5')  // DeviceSecret
+        {
+            lenth=(rxbuff_485[4]-'0')*10+rxbuff_485[5]-'0';                                                               //Êý¾Ý³¤¶È
+            strncpy((char*)DeviceSecret,(char*)(rxbuff_485+6),lenth);
+            if(DeviceSecret[0]!=0 && DeviceSecret[lenth-1]!=0)
+            {
+								sendBUFF2("OK,");
+                sendBUFF2(DeviceSecret);
+                sendBUFF2("\r\n");
+            }
+        }
+				if(rxbuff_485[2]=='5' && rxbuff_485[3]=='5')
+				{
+					if(ProductKey[0]==0 || ProductKey[0]==0xff)
+					{
+						sendBUFF2("ÇëÅäÖÃProductKey\r\n");
+					}
+					if(DeviceName[0]==0 || DeviceName[0]==0xff)
+					{
+						sendBUFF2("ÇëÅäÖÃDeviceName\r\n");
+					}
+					if(DeviceSecret[0]==0 || DeviceSecret[0]==0xff)
+					{
+						sendBUFF2("ÇëÅäÖÃDeviceSecret\r\n");
+					}
+					if(
+						ProductKey[0]!=0 && ProductKey[0]!=0xff &&
+						DeviceName[0]!=0 && DeviceName[0]!=0xff &&
+						DeviceSecret[0]!=0 && DeviceSecret[0]!=0xff 
+						)
+					{
+						memcpy(DS,ProductKey,12);
+						memcpy(DS+12,DeviceName,DeviceNamelenth);
+						memcpy(DS+12+DeviceNamelenth,DeviceSecret,32);
+						FLASH_SetLatency(FLASH_Latency_1);
+            FLASH_Unlock();
+            FLASH_ClearFlag(FLASH_FLAG_BSY | FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPERR);
+            FLASH_ErasePage(FLASH_canshu& (~(FLASH_PAGE_SIZE -1 )));
+            Flash_Write_Without_check(FLASH_canshu,(u8*)DS,(44+DeviceNamelenth));
+            FLASH_Lock();
+						for(ii=0;ii<(44+DeviceNamelenth);ii++)
+						{
+							sendchar2(DS[ii]);
+						}
+						sendBUFF2("\r\n");
+						sendBUFF2("ÅäÖÃÍê³É");
+					}
+				}
+
+        /*********************************************************************/
+        ac=0;   //´®¿Ú2½ÓÊÕÊý×éÖ¸Õë
+        memset(rxbuff_485,0,50);
+        USART_ITConfig(USART2,USART_IT_RXNE,ENABLE);           //¹Ø±Õ½ÓÊÕÖÐ¶Ï
+    }
+}
+
+void TIM15_IRQHandler(void)						//1ms½øÈëÒ»´ÎÖÐ¶Ï  ´®¿Ú3´¦Àí
+{
+    char *strx=0;
+    char *strx1=0;
+    char *strxbak=0;
+    u8 cc;
+    if ( TIM_GetITStatus(TIM15,TIM_IT_Update) != RESET ) //ÊÇ·ñ·¢ÉúÖÐ¶Ï
+    {
+        TIM_ClearITPendingBit(TIM15, TIM_FLAG_Update);    //Çå³ýÖÐ¶Ï´ý´¦ÀíÎ»
+        TIM_Cmd(TIM15, DISABLE);
+        USART_ITConfig(USART3,USART_IT_RXNE,DISABLE);           //¹Ø±Õ½ÓÊÕÖÐ¶Ï
+
+        rs485_w();//485´òÓ¡´®¿Ú3ÐÅÏ¢
+        delay_ms(10);
+        for(cc=0; cc<wireless_rxbuff_count; cc++) //Íù´®¿Ú1·¢ËÍÊý¾Ý
+        {
+            USART_SendData(USART1,wireless_rxbuff[cc]);
+            while (USART_GetFlagStatus(USART1,USART_FLAG_TXE) == RESET);
+        }
+        delay_ms(1);
+        rs485_r();
+        /**********************´¦Àí½ÓÊÕ³ÌÐò***************************/
+
+        strx=strstr((const char*)wireless_rxbuff,(const char*)"AT+DSCADDR");  //ÕâÊÇµØÖ·
+        strx1=strstr((const char*)wireless_rxbuff,(const char*)"TCP");
+        if((strx!=NULL)&&(strx1!=NULL))
+        {
+            memset(server_add1,0,30);
+            memset(com1,0,6);
+            memset(server_add2,0,30);
+            memset(com2,0,6);
+            Flash_Read(FLASH_canshu,(u8*)server_add1,30);
+            Flash_Read(FLASH_canshu+30,(u8*)com1,6);
+            Flash_Read(FLASH_canshu+40,(u8*)server_add2,30);
+            Flash_Read(FLASH_canshu+80,(u8*)com2,6);
+
+            if(*(strx+11)=='0')  //Ö÷·þÎñÆ÷µØÖ·
+            {
+                cc=0;
+                strxbak=strx+20;
+                while(*strxbak!='\"')
+                {
+                    if(*strxbak!=0x0d)server_add1[cc]=*strxbak;
+                    cc++;
+                    strxbak++;
+                }
+                cc=0;
+                strxbak+=2;
+                while(*strxbak!=0)
+                {
+                    if(*strxbak!=0x0d)com1[cc]=*strxbak;
+                    cc++;
+                    strxbak++;
+                }
+            }
+            if(*(strx+11)=='1')  //¸±·þÎñÆ÷µØÖ·
+            {
+                cc=0;
+                strxbak=strx+20;
+                while(*strxbak!='\"')
+                {
+                    if(*strxbak!=0x0d)server_add2[cc]=*strxbak;
+                    cc++;
+                    strxbak++;
+
+                }
+                cc=0;
+                strxbak+=2;
+                while(*strxbak!=0)
+                {
+                    if(*strxbak!=0x0d)com2[cc]=*strxbak;
+                    cc++;
+                    strxbak++;
+                }
+            }
+            FLASH_SetLatency(FLASH_Latency_1);
+            FLASH_Unlock();
+            FLASH_ClearFlag(FLASH_FLAG_BSY | FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPERR);
+            FLASH_ErasePage(FLASH_canshu& (~(FLASH_PAGE_SIZE -1 )));
+            Flash_Write_Without_check(FLASH_canshu,(u8*)server_add1,30);
+            Flash_Write_Without_check(FLASH_canshu+30,(u8*)com1,6);
+            Flash_Write_Without_check(FLASH_canshu+40,(u8*)server_add2,30);
+            Flash_Write_Without_check(FLASH_canshu+80,(u8*)com2,6);
+            FLASH_Lock();
+            GSM_CON=RST;
+        }
+        /************************************************************/
+        USART_ITConfig(USART3,USART_IT_RXNE,ENABLE);           //´ò¿ª½ÓÊÕÖÐ¶Ï
+        memset(wireless_rxbuff,0,100);
+        wireless_rxbuff_count=0;                               //´®¿Ú3½ÓÊÕÊý×éÖ¸Õë
+
+    }
+}
+
+void TIM16_IRQHandler(void)//500ms½øÈëÒ»´ÎÖÐ¶Ï    ¶¨Ê±·¢ËÍÐÄÌø
+{
+    if ( TIM_GetITStatus(TIM16,TIM_IT_Update) != RESET ) //ÊÇ·ñ·¢ÉúÖÐ¶Ï
+    {
+        TIM_ClearITPendingBit(TIM16, TIM_FLAG_Update);     //Çå³ýÖÐ¶Ï´ý´¦ÀíÎ»
+        TIM_Cmd(TIM16, ENABLE);
+				if(GSM_CON==CONNECT)heartbeatcount++;
+        if(stop_sys==0)
+					IWDG_ReloadCounter();
+        if(PM25flag==1)
+        {
+            timflag++;
+            GPIOA->ODR^=GPIO_Pin_0;
+        }
+        if(timflag>19)
+        {
+            timflag=0;
+            PM25flag=0;
+            GPIO_ResetBits(GPIOA,GPIO_Pin_0);
+        }
+				if(heartbeatcount>600)
+				{
+					heartbeatcount=0;
+					if(GSM_CON==CONNECT)
+					{
+						propertypost();
+						cuu++;
+					}
+				}
+    }
+}
+
+
+void sendchar(uint8_t ch)     //Í¬Ê±·¢ËÍµ½´®¿Ú1ºÍ´®¿Ú2ÒÔ±ã¹Û²ìÊý¾Ý
+{
+    USART_SendData(USART1,ch);
+    while (USART_GetFlagStatus(USART1,USART_FLAG_TXE) == RESET) {}
+    USART_SendData(USART2,ch);
+    while (USART_GetFlagStatus(USART2,USART_FLAG_TXE) == RESET) {}
+}
+void sendchar3(u8 ch)       //´®¿Ú3 ·¢ËÍ
+{
+    USART_SendData(USART3,ch);
+    while (USART_GetFlagStatus(USART3,USART_FLAG_TXE) == RESET);
+
+}
+void sendchar2(u8 ch)       //´®¿Ú3 ·¢ËÍ
+{
+    USART_SendData(USART2,ch);
+    while (USART_GetFlagStatus(USART2,USART_FLAG_TXE) == RESET);
+
+}
+void sendBUFF(uint8_t *p)       //·¢ËÍÒ»´®Êý¾Ý
+{
+    while((*p)&&(*p!=0xff))
+    {
+        sendchar(*p);
+        p++;
+    }
+}
+void sendBUFF2(uint8_t *p)       //·¢ËÍÒ»´®Êý¾Ý
+{
+    while((*p)&&(*p!=0xff))
+    {
+        sendchar2(*p);
+        p++;
+    }
+}
+void sendBUFF3(uint8_t *p)       //·¢ËÍÒ»´®Êý¾Ý
+{
+    while((*p)&&(*p!=0xff))
+    {
+        sendchar3(*p);
+        p++;
+    }
+}
+//2GÁ´½Ó
+void setGPRS(void)
+{
+    u8 i;
+    if(g4g3!=1)
+    {
+        GPIO_SetBits(GPIOA,GPIO_Pin_8);////¸´Î»
+        delay_ms(50);
+        GPIO_ResetBits(GPIOA,GPIO_Pin_8);
+    }
+    else
+    {
+        GPIO_ResetBits(GPIOA,GPIO_Pin_8);
+        delay_ms(50);
+        GPIO_SetBits(GPIOA,GPIO_Pin_8);////¸´Î»
+    }
+//	delay_ms(5000);
+
+    GPRS_delay(5);
+//	device_clr_noise_flag=0;
+//    device_reset_flag=1;
+    sendBUFF("+++\r\n");
+    GPRS_delay(3);
+    sendBUFF("AT\r\n");
+    GPRS_delay(3);
+    sendBUFF("AT\r\n");
+    GPRS_delay(3);
+    sendBUFF("AT\r\n");
+    GPRS_delay(3);
+    sendBUFF("AT+CCID\r\n");
+//    GPRS_delay(3);
+    //sendBUFF("ATE0\r\n");//È¡Ïû»ØÏÔ
+    GPRS_delay(3);
+    sendBUFF("AT+CPIN?\r\n");
+    GPRS_delay(3);
+
+    GPRS_delay(3);
+    sendBUFF("AT+CREG?\r\n");//¼ì²éÍøÂç×¢²á×´Ì¬
+    GPRS_delay(3);
+    sendBUFF("AT+CGATT?\r\n");//¼ì²éGPRS¸½×Å×´Ì¬
+    GPRS_delay(5);
+    sendBUFF("ATE0\r\n");
+    GPRS_delay(2);
+    sendBUFF("AT+CSQ\r\n");//¼ì²éÐÅºÅÇ¿¶È
+    delay_ms(1000);
+
+    GPRS_delay(10);
+//		sendBUFF("AT+CIICR\r\n");
+//		sendBUFF("AT+CIFSR\r\n");
+    sendBUFF("AT+CIPMODE=1\r\n");//ÉèÖÃÎªÍ¸Ã÷´«Êä
+    GPRS_delay(10);
+    for(i=0; i<5; i++)
+    {
+
+        sendBUFF("AT+CIPSTART=\"TCP\",\"dqhz.gdsmet.com\",\"38888\"\r\n");
+        if(GSM_CON==CONNECT)break;
+//       sendBUFF("AT+CIPSTART=\"TCP\",\"elej.gdsmet.com\",\"38889\" \r\n");
+//		   sendBUFF("AT+CIPSTART=\"TCP\",\"xmlw.gdsmet.com\",\"6610\"  \r\n");
+        GPRS_delay(10);
+
+    }
+//		sendBUFF("AT+CIPSTART=\"TCP\",\"139.9.75.8\",\"38888\"\r\n");
+
+    GPRS_delay(2);
+    Landingpack();//·¢ËÍµÇÂ½°ü
+    GPRS_delay(2);
+    Landingpack();//·¢ËÍµÇÂ½°ü
+    GPRS_delay(10);
+    rs485_w();
+    heart_beat();
+
+    rs485_r();
+    GPRS_delay(10);
+    rs485_w();
+    heart_beat();
+
+    rs485_r();
+}
+//4GÁ¬½Ó
+void AT_RST(void)
+{
+    u8 i,j,k;
+
+    GPIO_SetBits(GPIOA,GPIO_Pin_8);////¸´Î»
+    delay_ms(200);
+    GPIO_ResetBits(GPIOA,GPIO_Pin_8);
+//    UART1_Send("+++\r\n");//ÍøÂç×´Ì¬²éÑ¯
+    delay_ms(1000);
+    delay_ms(1000);
+    sendBUFF("+++\r\n");
+    delay_ms(1000);
+    sendBUFF("AT+CSQ\r\n");//
+    delay_ms(1000);
+    delay_ms(1000);
+//    if( ReFlame_OneBak[8]>0X30 ) GSM_CON=CONNECT;//ÓÐÍøÂçÐÅºÅÊ±£¬²»ÖØÆô
+    sendBUFF("AT+CREG?\r\n");//ÍøÂç×´Ì¬²éÑ¯
+    delay_ms(1000);
+    delay_ms(1000);
+//    if( ReFlame_OneBak[11]==0X31 )  GSM_CON=CONNECT;  //×¢²á³É¹¦
+//    AT_CGSN();
+
+//    AT_SIMID();
+
+    sendBUFF("AT+CSQ\r\n");
+    delay_ms(1000);
+
+    for(i=0; i<10; i++)
+    {
+
+        if ( GSM_CON==CONNECT )break;
+        memset(ReFlame_OneBak,0,100);
+//        if((server_add1[0]!=0)&&(server_add1[0]!=0xff))
+//        {
+//            sendBUFF("AT+QIOPEN=1,0,\"TCP\",");
+//            sendBUFF((u8*)server_add1);
+//            sendBUFF(",");
+//            sendBUFF((u8*)com1);
+//            sendBUFF(",0,2\r\n");
+//        } else break;
+
+         sendBUFF("AT+QIOPEN=1,0,\"TCP\",\"dqhz.gdsmet.com\",38888,0,2\r\n");
+        //\"elej.gdsmet.com\",38887,0,2\r\n
+
+        for(j=0; j<5; j++)
+        {
+            delay_ms(300);
+
+            if ( GSM_CON==CONNECT )break;
+            for(k=0; k<15; k++)
+            {
+                delay_ms(100);
+                if(ReFlame_OneBak[0+k]=='C'&&ReFlame_OneBak[1+k]=='O' &&ReFlame_OneBak[2+k]=='N'  )
+                {
+//                    WTH_Line(VOICE_CSH);
+                    GSM_CON=CONNECT ;
+//                    UART1_SendServer(0x11);
+                    delay_ms(1000);
+                    delay_ms(1000);
+                    delay_ms(1000);
+                    delay_ms(1000);
+                    delay_ms(1000);
+//                    UART1_SendServer(0x02);
+                    j=5;
+                    k=15;
+                    break;
+                }
+                else		GSM_CON=RST;
+            }
+        }
+        delay_ms(1000);
+        delay_ms(1000);
+    }
+    delay_ms(1000);
+    delay_ms(1000);
+//    Landingpack();
+//    delay_ms(2000);
+//    Landingpack();
+//    delay_ms(2000);
+//    heart_beat();
+//    delay_ms(2000);
+//    heart_beat();
+
+}
+void AT_CGSN()
+{
+    u8 i,j;
+    for(i=0; i<5; i++)
+    {
+        sendBUFF("AT+CGSN\r\n");
+        for(j=0; j<10; j++)
+        {
+            delay_ms(300);
+            if(ReFlame_OneBak[2]=='8'&&ReFlame_OneBak[3]=='6'  )
+            {
+//                memcpy(SendServPakage.IMEI,&ReFlame_OneBak[2],15);
+                break;
+            }
+        }
+        if(j<9)break;
+        delay_ms(1000);
+    }
+
+    //RST=0X01
+}
+
+//µÃµ½ SIM ID
+void AT_SIMID()
+{
+    u8 i,j;
+    for(i=0; i<5; i++)
+    {
+        sendBUFF("AT+CCID\r\n");
+        for(j=0; j<10; j++)
+        {
+            delay_ms(300);
+            if(ReFlame_OneBak[17]=='8'&&ReFlame_OneBak[18]=='9'  )
+            {
+//                memcpy(SendServPakage.Sim_ID,&ReFlame_OneBak[17],20);
+                break;
+            }
+        }
+        if(j<9)break;
+        delay_ms(1000);
+    }
+    //RST=0X01
+}
+void heart_beat(void)//ÐÄÌø°ü·¢ËÍ£¬5sÒ»´Î
+{
+    u8 i;
+    //sendBUFF("AT+CIPSEND\r\n");
+    delay_ms(50);
+
+    renew_sendbuff();//·¢ËÍÇ°ÏÈ¸üÐÂÊý¾Ý
+    for(i=0; i<60; i++)
+    {
+        sendchar(sendbuff[i]);
+
+    }
+    delay_ms(50);
+    //sendchar(0x1a);
+}
+
+
+void renew_sendbuff(void)//¶Ô·¢ËÍÊý×é¸üÐÂÊý¾Ý
+{
+    RTC_DateTimeTypeDef RTC_DateTimeStructure;
+
+    RTC_GetDateTime(&RTC_DateTimeStructure);       //¶ÁÈ¡µ±Ç°Ê±¼ä²¢´¢´æ
+//	AD.Phase_A_cur=(a/1000)&0xffff;
+
+
+    sendbuff[43]=RTC_DateTimeStructure.Month;//ÔÂ
+    sendbuff[44]=RTC_DateTimeStructure.Date;//ÈÕ
+    sendbuff[45]=RTC_DateTimeStructure.Hour;//Ê±
+    sendbuff[46]=RTC_DateTimeStructure.Minute;//·Ö
+    sendbuff[47]=RTC_DateTimeStructure.Second;//ÃëÖ
+
+    sendbuff[58]=CheckSum(sendbuff);
+//	sendbuff[40]=checkbuf(sendbuff);
+    //sendbuff[40]=0xae;
+    sendbuff[59]=0x16;
+
+}
+
+void Landingpack(void)//µÇÂ½°ü·¢ËÍ
+{
+
+    //sendchar(0x1a);
+}
+
+//u8 BUF[9]={0x68,0xcc,0x96,0x00,0x00,0x00,0x01,0x68,0x01};
+unsigned char CheckSum(u8 Buf[])
+{
+    u8 check;
+    u8 i;
+    check = 0;
+    for(i = 0; i< Buf[9] +10; i++)
+    {
+        check += Buf[i];
+    }
+    Buf[Buf[9] +10] = check ;
+    return check;
+}
+u8 checkbuf(u8 *buf)
+{
+    u16 reslt,j;
+    u8 a;
+
+
+    for(j=0; j<40; j++)
+    {
+        reslt+=buf[j];
+    }
+    a=reslt&0xff;
+    return a;
+}
+
+void GPRS_delay(u8 x)////Á¬½Ó·þÎñÆ÷¹ý³ÌÖÐÈÔÈ»¶ÁÈ¡Êý¾Ý
+{
+    u8 i;
+    for(i=0; i<x; i++)
+    {
+
+    }
+}
+
+void ali_delayms(u16 nms)
+{
+    u16 i,j;
+    for(i=0; i<nms; i++)
+        for(j=0; j<24000; j++);
+}
+
+void Ali_set(void)
+{
+    char *strx=0;
+	u8 i=0;
+		u8 ProductKeybak[11];
+	memcpy(ProductKeybak,ProductKey,11);
+    delay_ms(5000);
+    sendBUFF("ATE1\r\n");
+    ali_delayms(1000);
+    sendBUFF("AT+CGATT?\r\n");
+    ali_delayms(1000);
+    strx=strstr((const char*)ReFlame_OneBak,(const char*)"+CGATT: 1");
+    while(strx==NULL)
+    {
+        memset(ReFlame_OneBak,0,100);
+        sendBUFF("AT+CGATT?\r\n");
+        ali_delayms(300);
+        strx=strstr((const char*)ReFlame_OneBak,(const char*)"+CGATT: 1");
+				if(i++>10)break;
+    }
+		i=0;
+    sendBUFF("AT+CREG?\r\n");
+    ali_delayms(1000);
+    strx=strstr((const char*)ReFlame_OneBak,(const char*)"+CREG: 0,1");
+    while(strx==NULL)
+    {
+        memset(ReFlame_OneBak,0,100);
+        sendBUFF("AT+CREG?\r\n");
+        ali_delayms(300);
+        strx=strstr((const char*)ReFlame_OneBak,(const char*)"+CREG: 0,1");
+			if(i++>10)break;
+    }
+		i=0;
+    sendBUFF("AT+CSQ\r\n");
+    ali_delayms(1000);
+//    sendBUFF("AT+QMTCFG=\"recv/mode\",0,0,1\r\n");
+//    ali_delayms(1000);
+//    strx=strstr((const char*)ReFlame_OneBak,(const char*)"OK");
+//    while(strx==NULL)
+//    {
+//        memset(ReFlame_OneBak,0,500);
+//        sendBUFF("AT+QMTCFG=\"recv/mode\",0,0,1\r\n");
+//        ali_delayms(300);
+//        strx=strstr((const char*)ReFlame_OneBak,(const char*)"OK");
+//    }
+
+//    sendBUFF("AT+QMTCFG=\"aliauth\",0,\"a1qDdex2jwj\",\"YGTest\",\"Zppxsneiw64LYxhuIkm81hvm4QI6Q6Yb\"\r\n");  //ÅäÖÃ°¢ÀïÔÆ²ÎÊý
+		sendBUFF("AT+QMTCFG=\"aliauth\",0,\"");
+		sendBUFF(ProductKeybak);
+		sendBUFF("\",\"");
+		sendBUFF(DeviceName);
+		sendBUFF("\",\"");
+		sendBUFF(DeviceSecret);
+		sendBUFF("\"\r\n");
+    ali_delayms(1000);
+    strx=strstr((const char*)ReFlame_OneBak,(const char*)"OK");
+    while(strx==NULL)
+    {
+        memset(ReFlame_OneBak,0,100);
+//        sendBUFF("AT+QMTCFG=\"aliauth\",0,\"a1qDdex2jwj\",\"YGTest\",\"Zppxsneiw64LYxhuIkm81hvm4QI6Q6Yb\"\r\n");
+				sendBUFF("AT+QMTCFG=\"aliauth\",0,\"");
+				sendBUFF(ProductKeybak);
+				sendBUFF("\",\"");
+				sendBUFF(DeviceName);
+				sendBUFF("\",\"");
+				sendBUFF(DeviceSecret);
+				sendBUFF("\"\r\n");
+        ali_delayms(300);
+        strx=strstr((const char*)ReFlame_OneBak,(const char*)"OK");
+			if(i++>10)break;
+    }
+		i=0;
+    sendBUFF("AT+QMTOPEN=0,\"iot-as-mqtt.cn-shanghai.aliyuncs.com\",1883\r\n");  //´ò¿ªMQTTÁ´½Ó
+    ali_delayms(1000);
+    strx=strstr((const char*)ReFlame_OneBak,(const char*)"+QMTOPEN: 0,0");
+    while(strx==NULL)
+    {
+        memset(ReFlame_OneBak,0,100);
+        sendBUFF("AT+QMTOPEN=0,\"iot-as-mqtt.cn-shanghai.aliyuncs.com\",1883\r\n");
+        ali_delayms(1000);
+        strx=strstr((const char*)ReFlame_OneBak,(const char*)"+QMTOPEN: 0,0");
+			if(i++>10)break;
+    }
+		i=0;
+//    sendBUFF("AT+QMTCONN=0,\"YGTest\"\r\n");      //µÇÂ½
+		sendBUFF("AT+QMTCONN=0,\"");
+		sendBUFF(DeviceName);
+		sendBUFF("\"\r\n");
+    strx=strstr((const char*)ReFlame_OneBak,(const char*)"+QMTCONN: 0,0,0");
+    while(strx==NULL)
+    {
+        memset(ReFlame_OneBak,0,100);
+//        sendBUFF("AT+QMTCONN=0,\"YGTest\"\r\n");
+			sendBUFF("AT+QMTCONN=0,\"");
+			sendBUFF(DeviceName);
+			sendBUFF("\"\r\n");
+        ali_delayms(1000);
+        strx=strstr((const char*)ReFlame_OneBak,(const char*)"+QMTCONN: 0,0,0");
+			if(i++>10)break;
+    }
+		i=0;
+		if(strx!=NULL)GSM_CON=CONNECT;
+    ali_delayms(1000);
+		
+    rs485_r();
+}
+
+
+void ali_send(u16 len)
+{
+		u8 i=0;
+//		char *strx=0;
+    u8 a2[]="AT+QMTPUBEX=0,0,0,0,\"/sys/%s/%s/thing/event/property/post\",%d";
+    u8 a1[150]={0};
+		u8 ProductKeybak[11]={0};
+		memcpy(ProductKeybak,ProductKey,11);
+    sprintf(a1,a2,ProductKeybak,DeviceName,len);
+    sendBUFF(a1);
+    sendBUFF("\r\n");
+    delay_ms(1000);
+//    strx=strstr((const char*)ReFlame_OneBak,(const char*)">");
+//    while(strx==NULL)
+//    {
+//        memset(ReFlame_OneBak,0,100);
+//        sendBUFF(a1);
+//        sendBUFF("\r\n");	
+//        ali_delayms(100);
+//        strx=strstr((const char*)ReFlame_OneBak,(const char*)">");
+//			if(i++>10)break;
+//    }
+}
+
+void propertypost(void)
+{
+	u8 i=0;
+	u8 len;
+	u8 a1[200];
+	//float ADC_MQ9,ADC_TVOC,ADC_val4,ADC_val5;  PM25content
+	char json_testbuf[]="{\"params\":{\"CO\":%f,\"PM25\":%f,\"TVOC\":%f,\"CO2\":%f,\"HCHO\":%f,\"CurrentHumidity\":%f,\"CurrentTemperature\":%f}}";
+	sprintf(a1,json_testbuf,ADC_val4,PM25content,ADC_TVOC,ADC_MQ9,ADC_val5,(float)humi,(float)tempera);
+	len=strlen(a1);
+	ali_send(len);
+	sendBUFF((u8 *)a1);
+	sendBUFF("\r\n");
+	delay_ms(50);
+		
+}
+
+

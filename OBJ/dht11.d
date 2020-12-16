@@ -1,0 +1,15 @@
+..\obj\dht11.o: ..\HARDWARE\dht11.c
+..\obj\dht11.o: ..\HARDWARE\dht11.h
+..\obj\dht11.o: ..\User\stm32f0xx.h
+..\obj\dht11.o: ..\CORE\core_cm0.h
+..\obj\dht11.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+..\obj\dht11.o: ..\CORE\core_cmInstr.h
+..\obj\dht11.o: ..\CORE\core_cmFunc.h
+..\obj\dht11.o: ..\User\system_stm32f0xx.h
+..\obj\dht11.o: ..\User\stm32f0xx_conf.h
+..\obj\dht11.o: ..\STM32F03x_FWLib\inc\stm32f0xx_gpio.h
+..\obj\dht11.o: ..\User\stm32f0xx.h
+..\obj\dht11.o: ..\STM32F03x_FWLib\inc\stm32f0xx_rcc.h
+..\obj\dht11.o: ..\STM32F03x_FWLib\inc\stm32f0xx_usart.h
+..\obj\dht11.o: ..\STM32F03x_FWLib\inc\stm32f0xx_misc.h
+..\obj\dht11.o: ..\SYSTEM\delay.h

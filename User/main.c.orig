@@ -1,0 +1,367 @@
+//////////////////////////////////////////////////////////////////////////////////
+
+//******************************************************************************/
+
+#include "stm32f0xx.h"
+#include "stm32f0xx_adc.h"
+#include "stm32f0xx_exti.h"
+#include "string.h"
+#include "stm32f0xx_syscfg.h"
+#include "delay.h"
+#include "USART1.h"
+#include "rtc.h"
+#include "math.h"
+#include "Flash_Mem.h"
+#include "adc.h"
+
+#define  APPLICATION_ADDRESS    ((uint32_t)0x08005000)
+
+/*---------------------------函数定义--------------------------------------------------*/
+void RCC_INIt(void);
+void g4org2(void);
+void LED_init(void);
+void led2_on(void);
+void led2_off(void);
+void led3_on(void);
+void led3_off(void);
+u16 adcx_get(u8 x);
+//u8 PM25Level_out(void);
+/*---------------------------------------------------------------------------------------*/
+/*----------------------------变量定义-------------------------------------------------*/
+//u8 addr[6]= {0x01,0x00,0x00,0x00,0x00,0x02}; //ID缓存
+extern u8 GSM_CON;
+u8 cuu=0;                  //重连计数
+u8 SIMID[20];              //SIM卡ID
+u8 GSM_signal_strengh=0;     //信号强度
+u8 GSM_signal_strenghbak=0;
+extern u8 g4g3;                   //2G或4G信号标志
+extern u8 g4g3_flag;
+// ADC1转换的电压值通过MDA方式传到flash
+extern __IO uint16_t  RegularConvData_Tab;
+// 局部变量，用于存从flash读到的电压值
+float ADC_MQ9,ADC_TVOC,ADC_val4,ADC_val5;
+u32 LCD_count=0;
+u8 locke=0;
+u8 wc=0;
+u32 I1old1=0,I2old1=0,I3old1=0,loudianold1=0;
+u32 I1old2=0,I2old2=0,I3old2=0,loudianold2=0;
+u32 I1old3=0,I2old3=0,I3old3=0,loudianold3=0;
+u16 e_cou=0;
+extern u8 server_add1[30];  		//  服务器地址
+extern u8 server_add2[30];
+extern u8 com1[6];             //端口1
+extern u8 com2[6];							//端口2
+float PM25content=0;
+extern u8 ProductKey[12];
+extern u8 DeviceName[20];
+extern u8 DeviceSecret[32];
+extern u8 DeviceNamelenth;
+/*------远程启动------------------------------------------------------------------------*/
+void iRemapIrqVector(void)
+{
+    uint32_t i = 0;
+    /* Relocate by software the vector table to the internal SRAM at 0x20000000 ***/
+    /* Copy the vector table from the Flash (mapped at the base of the application
+       load address 0x08003000) to the base address of the SRAM at 0x20000000. */
+    for(i = 0; i < 48; i++)
+    {
+        *((uint32_t*)(0x20000000 + (i << 2)))=*(__IO uint32_t*)(APPLICATION_ADDRESS + (i<<2));
+    }
+    /* Enable the SYSCFG peripheral clock*/
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
+
+    /* Remap SRAM at 0x00000000 */
+    SYSCFG_MemoryRemapConfig(SYSCFG_MemoryRemap_SRAM);
+
+}
+
+/*----------------------------------------------------------------------------------------*/
+
+int main(void)
+{
+#ifdef APP
+    iRemapIrqVector();
+#endif
+
+    GSM_CON=RST ;
+    RCC_INIt();
+    ADC1_DMA_Init();
+    delay_init();
+    LED_init();
+    RTC_Initializes();
+    USART1_Init(115200);
+    TIM2_Config();
+    IWDG_Config();
+    Flash_Read(FLASH_canshu,(u8*)ProductKey,12);
+    DeviceNamelenth=ProductKey[11];
+    Flash_Read(FLASH_canshu+12,(u8*)DeviceName,DeviceNamelenth);
+    Flash_Read(FLASH_canshu+DeviceNamelenth+12,(u8*)DeviceSecret,32);
+    sendBUFF(ProductKey);
+    sendBUFF("\r\n");
+    sendBUFF(DeviceName);
+    sendBUFF("\r\n");
+    sendBUFF(DeviceSecret);
+    sendBUFF("\r\n");
+    cuu=0;
+		Ali_set();
+//		AT_RST();
+    propertypost();
+    while (1)
+    {
+        ADC_TVOC=adcx_get(7)*3300/0xfff;
+        led2_on();
+        led3_on();
+        delay_ms(200);
+        ADC_MQ9=adcx_get(6)*3300/0xfff;
+        delay_ms(200);
+        ADC_val4=adcx_get(4)*3300/0xfff;
+			delay_ms(20);
+			ADC_val5=adcx_get(5);
+        led2_off();
+        led3_off();
+        delay_ms(200);
+//			ali_send(30);
+//				PM25content=PM25Level_out();
+    }
+
+}
+/*显示联网状态，重连程序*/
+void Networking_status(void)
+{
+
+    if(cuu>2)
+    {
+        cuu=0;
+        GSM_CON=RST;
+    }
+
+    if ( GSM_CON==CONNECT )
+    {
+    }
+    if(GSM_CON==RST)
+    {
+        rs485_w();
+        AT_RST();
+        rs485_r();
+        cuu=2;
+    }
+}
+
+/*时钟设置-----------------------------------------------------------------------*/
+void RCC_INIt(void)
+{
+    ErrorStatus HSEStartUpStatus;//定义外部高速晶体启动状态枚举变量
+
+    RCC_DeInit();//复位RCC外部设备寄存器到默认值
+    RCC_HSEConfig(RCC_HSE_ON); //打开外部高速晶振
+    HSEStartUpStatus = RCC_WaitForHSEStartUp();//等待外部高速时钟准备好
+    if(HSEStartUpStatus == SUCCESS)//外部高速时钟已经准别好
+    {
+        RCC_HCLKConfig(RCC_SYSCLK_Div1);//配置AHB(HCLK)时钟等于==SYSCLK
+//        RCC_PCLKConfig(RCC_HCLK_Div1); //配置APB2(PCLK2)钟==AHB时钟
+//        RCC_PCLKConfig(RCC_HCLK_Div1);//配置APB1(PCLK1)钟==AHB1/2时钟
+//        FLASH_SetLatency(FLASH_ACR_LATENCY);//FLASH延时2个周期
+//        FLASH_PrefetchBufferCmd(ENABLE);//使能FLASH预取缓冲区
+        RCC_PLLConfig(RCC_PLLSource_PREDIV1,RCC_PLLMul_6);	//配置PLL时钟 == 8M*6
+
+        RCC_PLLCmd(ENABLE);//使能PLL时钟
+        while(RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET); //等待PLL时钟就绪
+
+        RCC_SYSCLKConfig(RCC_SYSCLKSource_PLLCLK);//配置系统时钟 = PLL时钟
+
+        while(RCC_GetSYSCLKSource() != 0x08); //检查PLL时钟是否作为系统时钟
+    }
+//	RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);//打开GPIOD和AFIO时钟
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_SPI1, ENABLE);
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_SPI2, ENABLE);
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA, ENABLE);//打开GPIOA时钟
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOB, ENABLE);//打开GPIOB时钟
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOC, ENABLE);//打开GPIOC时钟
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOD, ENABLE);//打开GPIOD时钟
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_PWR,ENABLE);	//point?it;cann't?lose?it;这个必须要加；掉电检测用
+
+    // SPI_ALL_Init();
+}
+/*读版本号---------------------------------------------------------------------*/
+
+/*继电器控制函数-------------------------------------------------------------------*/
+void relay1_on(void)
+{
+    GPIO_SetBits(GPIOA,GPIO_Pin_11);
+}
+void relay1_off(void)
+{
+    GPIO_ResetBits(GPIOA,GPIO_Pin_11);
+}
+void relay2_on(void)
+{
+    GPIO_SetBits(GPIOA,GPIO_Pin_12);
+}
+void relay2_off(void)
+{
+    GPIO_ResetBits(GPIOA,GPIO_Pin_12);
+}
+/*看门狗*/
+void IWDG_Config(void)
+{
+    IWDG_WriteAccessCmd(IWDG_WriteAccess_Enable); //使能对寄存器IWDG_PR、IWDG_RLR的写操作
+    IWDG_SetPrescaler(IWDG_Prescaler_256);		  //设置IWDG预分频值：256分频最大
+    IWDG_SetReload(4000);	   //设置IWDG的重装载值	:范围0~0x0FFF
+    IWDG_ReloadCounter();	   //喂狗：重新装载计数器
+    IWDG_Enable();			   //使能IWDG定时器
+}
+
+/*-----------------------识别2G或4G-------------------------------------*/
+
+
+void g4org2(void)
+{
+    u8 i=10;
+    GPIO_ResetBits(GPIOA,GPIO_Pin_8);//GPRSreset
+    delay_ms(3000);
+    g4g3_flag=1;
+    while(i--)
+    {
+        delay_ms(1000);
+//		rs485_w();
+//		delay_ms(1);
+        sendBUFF("ATI\r\n");
+        delay_ms(1000);
+//		rs485_r();
+        if(g4g3==4) {
+            g4g3_flag=0;
+            break;
+        }
+    }
+    g4g3_flag=0;
+
+}
+
+void LED_init(void)
+{
+    GPIO_InitTypeDef    GPIO_InitStruct;
+    NVIC_InitTypeDef NVIC_InitStruct;
+    EXTI_InitTypeDef EXTI_InitStruct;
+    /* Enable  GPIOA clock */
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOB, ENABLE);
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOC, ENABLE);
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
+    GPIO_InitStruct.GPIO_Pin = GPIO_Pin_2;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_OUT;
+    GPIO_InitStruct.GPIO_Speed=GPIO_Speed_Level_3;
+    GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_UP;
+    GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    GPIO_InitStruct.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_OUT;
+    GPIO_InitStruct.GPIO_Speed=GPIO_Speed_Level_3;
+    GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_UP;
+    GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    GPIO_InitStruct.GPIO_Pin = GPIO_Pin_13;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_OUT;
+    GPIO_InitStruct.GPIO_Speed=GPIO_Speed_Level_3;
+    GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_UP;
+    GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    GPIO_InitStruct.GPIO_Pin = GPIO_Pin_0|GPIO_Pin_1;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_IN;
+    GPIO_InitStruct.GPIO_Speed=GPIO_Speed_Level_3;
+    GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_DOWN;
+    GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    NVIC_InitStruct.NVIC_IRQChannel = EXTI0_1_IRQn;
+    NVIC_InitStruct.NVIC_IRQChannelPriority = 0;
+    NVIC_InitStruct.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStruct);
+
+
+    SYSCFG_EXTILineConfig(EXTI_PortSourceGPIOB, EXTI_PinSource0);
+    EXTI_InitStruct.EXTI_Line = EXTI_Line0;
+    EXTI_InitStruct.EXTI_Mode = EXTI_Mode_Interrupt;
+    EXTI_InitStruct.EXTI_Trigger = EXTI_Trigger_Falling; //下降沿中断
+    EXTI_InitStruct.EXTI_LineCmd = ENABLE;
+    EXTI_Init(&EXTI_InitStruct);
+    GPIO_ResetBits(GPIOA,GPIO_Pin_0);
+}
+void led2_on(void)
+{
+    GPIO_ResetBits(GPIOB,GPIO_Pin_2);
+}
+void led2_off(void)
+{
+    GPIO_SetBits(GPIOB,GPIO_Pin_2);
+}
+
+void led3_on(void)
+{
+    GPIO_ResetBits(GPIOC,GPIO_Pin_13);
+}
+void led3_off(void)
+{
+    GPIO_SetBits(GPIOC,GPIO_Pin_13);
+}
+u16 adcx_get(u8 x)
+{
+    switch (x)
+    {
+    case 4:
+        ADC_ChannelConfig(ADC1, ADC_Channel_4, ADC_SampleTime_55_5Cycles);
+        while (ADC_GetFlagStatus(ADC1, ADC_FLAG_ADRDY) == RESET);
+        ADC_StartOfConversion(ADC1);
+        while(ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC)==RESET);
+        return ADC_GetConversionValue(ADC1);
+
+    case 5:
+
+        ADC_ChannelConfig(ADC1, ADC_Channel_5, ADC_SampleTime_55_5Cycles);
+
+        while (ADC_GetFlagStatus(ADC1, ADC_FLAG_ADRDY) == RESET);
+        ADC_StartOfConversion(ADC1);
+        while(ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC)==RESET);
+        return ADC_GetConversionValue(ADC1);
+
+    case 6:
+
+        ADC_ChannelConfig(ADC1, ADC_Channel_6, ADC_SampleTime_55_5Cycles);
+
+        while (ADC_GetFlagStatus(ADC1, ADC_FLAG_ADRDY) == RESET);
+        ADC_StartOfConversion(ADC1);
+        while(ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC)==RESET);
+        return ADC_GetConversionValue(ADC1);
+
+    case 7:
+
+        ADC_ChannelConfig(ADC1, ADC_Channel_7, ADC_SampleTime_55_5Cycles);
+
+        while (ADC_GetFlagStatus(ADC1, ADC_FLAG_ADRDY) == RESET);
+        ADC_StartOfConversion(ADC1);
+        while(ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC)==RESET);
+        return ADC_GetConversionValue(ADC1);
+
+    }
+
+}
+
+
+
+//u8 PM25Level_out(void)
+//{
+//	u8 i=100;
+//	u8 H=0,L=0;
+//	while(i--)
+//	{
+//		if(PM25L)
+//		{
+//			H++;
+//			delay_us(10);
+//		}else
+//		{
+//			L++;
+//			delay_us(10);
+//		}
+//	}
+//	return (L/(H+L)*100);
+//}
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
